@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from lerobot.utils.import_utils import require_package
+# Kinematics utilities for robot modeling.
 
-# LeRobotDataset (imported at module top in dataset.py) pulls in heavy dataset deps;
-# guard the optional dependency here so importing this package fails loudly if it's missing.
-require_package("datasets", extra="dataset")
+from .kinematics import RobotKinematics as RobotKinematics
 
-from .annotate import submit_annotate_to_hf
-from .hf import submit_to_hf
-
-__all__ = ["submit_annotate_to_hf", "submit_to_hf"]
+__all__ = ["RobotKinematics"]

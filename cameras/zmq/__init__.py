@@ -1,4 +1,6 @@
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+#!/usr/bin/env python
+
+# Copyright 2026 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from lerobot.utils.import_utils import require_package
+from .camera_zmq import ZMQCamera
+from .configuration_zmq import ZMQCameraConfig
 
-# LeRobotDataset (imported at module top in dataset.py) pulls in heavy dataset deps;
-# guard the optional dependency here so importing this package fails loudly if it's missing.
-require_package("datasets", extra="dataset")
-
-from .annotate import submit_annotate_to_hf
-from .hf import submit_to_hf
-
-__all__ = ["submit_annotate_to_hf", "submit_to_hf"]
+__all__ = ["ZMQCamera", "ZMQCameraConfig"]
