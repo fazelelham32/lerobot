@@ -13,177 +13,237 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
-import platform
-from functools import wraps
 
-import pytest
+import logging
+from collections import deque
+
+import numpy as np
 import torch
+from torch import nn
 
-from lerobot.utils.device_utils import auto_select_torch_device
-from lerobot.utils.import_utils import is_package_available
-
-DEVICE = os.environ.get("LEROBOT_TEST_DEVICE", str(auto_select_torch_device()))
-
-
-# Camera indices used for connecting physical cameras
-OPENCV_CAMERA_INDEX = int(os.environ.get("LEROBOT_TEST_OPENCV_CAMERA_INDEX", 0))
-INTELREALSENSE_SERIAL_NUMBER = int(os.environ.get("LEROBOT_TEST_INTELREALSENSE_SERIAL_NUMBER", 128422271614))
-
-DYNAMIXEL_PORT = os.environ.get("LEROBOT_TEST_DYNAMIXEL_PORT", "/dev/tty.usbmodem575E0032081")
-DYNAMIXEL_MOTORS = {
-    "shoulder_pan": [1, "xl430-w250"],
-    "shoulder_lift": [2, "xl430-w250"],
-    "elbow_flex": [3, "xl330-m288"],
-    "wrist_flex": [4, "xl330-m288"],
-    "wrist_roll": [5, "xl330-m288"],
-    "gripper": [6, "xl330-m288"],
-}
-
-FEETECH_PORT = os.environ.get("LEROBOT_TEST_FEETECH_PORT", "/dev/tty.usbmodem585A0080971")
-FEETECH_MOTORS = {
-    "shoulder_pan": [1, "sts3215"],
-    "shoulder_lift": [2, "sts3215"],
-    "elbow_flex": [3, "sts3215"],
-    "wrist_flex": [4, "sts3215"],
-    "wrist_roll": [5, "sts3215"],
-    "gripper": [6, "sts3215"],
-}
+from lerobot.configs import FeatureType, PolicyFeature, PreTrainedConfig
+from lerobot.lerobot_types import PolicyAction, RobotAction, RobotObservation
+from lerobot.utils.constants import ACTION, OBS_STR
+from lerobot.utils.feature_utils import build_dataset_frame
 
 
-def require_x86_64_kernel(func):
-    """
-    Decorator that skips the test if plateform device is not an x86_64 cpu.
-    """
-    from functools import wraps
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if platform.machine() != "x86_64":
-            pytest.skip("requires x86_64 plateform")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def require_cpu(func):
-    """
-    Decorator that skips the test if device is not cpu.
-    """
-    from functools import wraps
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if DEVICE != "cpu":
-            pytest.skip("requires cpu")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def require_cuda(func):
-    """
-    Decorator that skips the test if cuda is not available.
-    """
-    from functools import wraps
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if not torch.cuda.is_available():
-            pytest.skip("requires cuda")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def require_hf_token(func):
-    """
-    Decorator that skips the test if no Hugging Face Hub token is available.
-    """
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        from huggingface_hub import get_token
-
-        if get_token() is None:
-            pytest.skip("requires HF token for gated model access")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def require_env(func):
-    """
-    Decorator that skips the test if the required environment package is not installed.
-    As it need 'env_name' in args, it also checks whether it is provided as an argument.
-    If 'env_name' is None, this check is skipped.
-    """
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Determine if 'env_name' is provided and extract its value
-        arg_names = func.__code__.co_varnames[: func.__code__.co_argcount]
-        if "env_name" in arg_names:
-            # Get the index of 'env_name' and retrieve the value from args
-            index = arg_names.index("env_name")
-            env_name = args[index] if len(args) > index else kwargs.get("env_name")
+def populate_queues(
+    queues: dict[str, deque], batch: dict[str, torch.Tensor], exclude_keys: list[str] | None = None
+):
+    if exclude_keys is None:
+        exclude_keys = []
+    for key in batch:
+        # Ignore keys not in the queues already (leaving the responsibility to the caller to make sure the
+        # queues have the keys they want).
+        if key not in queues or key in exclude_keys:
+            continue
+        if len(queues[key]) != queues[key].maxlen:
+            # initialize by copying the first observation several times until the queue is full
+            while len(queues[key]) != queues[key].maxlen:
+                queues[key].append(batch[key])
         else:
-            raise ValueError("Function does not have 'env_name' as an argument.")
-
-        # Perform the package check
-        package_name = f"gym_{env_name}"
-        if env_name is not None and not is_package_available(package_name):
-            pytest.skip(f"gym-{env_name} not installed")
-
-        return func(*args, **kwargs)
-
-    return wrapper
+            # add latest observation to the queue
+            queues[key].append(batch[key])
+    return queues
 
 
-def skip_if_package_arg_missing(func):
+def get_device_from_parameters(module: nn.Module) -> torch.device:
+    """Get a module's device by checking one of its parameters.
+
+    Note: assumes that all parameters have the same device
     """
-    Decorator that skips the test if the required package is not installed.
-    This is similar to `require_env` but more general in that it can check any package (not just environments).
-    As it need 'required_packages' in args, it also checks whether it is provided as an argument.
-    If 'required_packages' is None, this check is skipped.
+    return next(iter(module.parameters())).device
+
+
+def get_dtype_from_parameters(module: nn.Module) -> torch.dtype:
+    """Get a module's parameter dtype by checking one of its parameters.
+
+    Note: assumes that all parameters have the same dtype.
     """
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Determine if 'required_packages' is provided and extract its value
-        arg_names = func.__code__.co_varnames[: func.__code__.co_argcount]
-        if "required_packages" in arg_names:
-            # Get the index of 'required_packages' and retrieve the value from args
-            index = arg_names.index("required_packages")
-            required_packages = args[index] if len(args) > index else kwargs.get("required_packages")
-        else:
-            raise ValueError("Function does not have 'required_packages' as an argument.")
-
-        if required_packages is None:
-            return func(*args, **kwargs)
-
-        # Perform the package check
-        for package in required_packages:
-            if not is_package_available(package):
-                pytest.skip(f"{package} not installed")
-
-        return func(*args, **kwargs)
-
-    return wrapper
+    return next(iter(module.parameters())).dtype
 
 
-def skip_if_package_missing(package_name, import_name=None):
+def get_output_shape(module: nn.Module, input_shape: tuple) -> tuple:
     """
-    Decorator that skips the test if the specified package is not installed.
+    Calculates the output shape of a PyTorch module given an input shape.
+
+    Args:
+        module (nn.Module): a PyTorch module
+        input_shape (tuple): A tuple representing the input shape, e.g., (batch_size, channels, height, width)
+
+    Returns:
+        tuple: The output shape of the module.
     """
+    dummy_input = torch.zeros(size=input_shape)
+    with torch.inference_mode():
+        output = module(dummy_input)
+    return tuple(output.shape)
 
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            if not is_package_available(pkg_name=package_name, import_name=import_name):
-                pytest.skip(f"{package_name} not installed")
-            return func(*args, **kwargs)
 
-        return wrapper
+def log_model_loading_keys(missing_keys: list[str], unexpected_keys: list[str]) -> None:
+    """Log missing and unexpected keys when loading a model.
 
-    return decorator
+    Args:
+        missing_keys (list[str]): Keys that were expected but not found.
+        unexpected_keys (list[str]): Keys that were found but not expected.
+    """
+    if missing_keys:
+        logging.warning(f"Missing key(s) when loading model: {missing_keys}")
+    if unexpected_keys:
+        logging.warning(f"Unexpected key(s) when loading model: {unexpected_keys}")
+
+
+# TODO(Steven): Move this function to a proper preprocessor step
+def prepare_observation_for_inference(
+    observation: dict[str, np.ndarray],
+    device: torch.device,
+    task: str | None = None,
+    robot_type: str | None = None,
+) -> RobotObservation:
+    """Converts observation data to model-ready PyTorch tensors.
+
+    This function takes a dictionary of NumPy arrays, performs necessary
+    preprocessing, and prepares it for model inference. The steps include:
+    1. Converting NumPy arrays to PyTorch tensors.
+    2. Normalizing and permuting image data (if any).
+    3. Adding a batch dimension to each tensor.
+    4. Moving all tensors to the specified compute device.
+    5. Adding task and robot type information to the dictionary.
+
+    Args:
+        observation: A dictionary mapping observation names (str) to NumPy
+            array data. For images, the format is expected to be (H, W, C).
+        device: The PyTorch device (e.g., 'cpu' or 'cuda') to which the
+            tensors will be moved.
+        task: An optional string identifier for the current task.
+        robot_type: An optional string identifier for the robot being used.
+
+    Returns:
+        A dictionary where values are PyTorch tensors preprocessed for
+        inference, residing on the target device. Image tensors are reshaped
+        to (C, H, W) and normalized to a [0, 1] range.
+    """
+    for name in observation:
+        observation[name] = torch.from_numpy(observation[name])
+        if "image" in name:
+            if observation[name].dtype == torch.uint8:
+                observation[name] = observation[name].type(torch.float32) / 255
+            observation[name] = observation[name].permute(2, 0, 1).contiguous()
+        observation[name] = observation[name].unsqueeze(0)
+        observation[name] = observation[name].to(device)
+
+    observation["task"] = task if task else ""
+    observation["robot_type"] = robot_type if robot_type else ""
+
+    return observation
+
+
+def build_inference_frame(
+    observation: RobotObservation,
+    device: torch.device,
+    ds_features: dict[str, dict],
+    task: str | None = None,
+    robot_type: str | None = None,
+) -> RobotObservation:
+    """Constructs a model-ready observation tensor dict from a raw observation.
+
+    This utility function orchestrates the process of converting a raw,
+    unstructured observation from an environment into a structured,
+    tensor-based format suitable for passing to a policy model.
+
+    Args:
+        observation: The raw observation dictionary, which may contain
+            superfluous keys.
+        device: The target PyTorch device for the final tensors.
+        ds_features: A configuration dictionary that specifies which features
+            to extract from the raw observation.
+        task: An optional string identifier for the current task.
+        robot_type: An optional string identifier for the robot being used.
+
+    Returns:
+        A dictionary of preprocessed tensors ready for model inference.
+    """
+    # Extracts the correct keys from the incoming raw observation
+    observation = build_dataset_frame(ds_features, observation, prefix=OBS_STR)
+
+    # Performs the necessary conversions to the observation
+    observation = prepare_observation_for_inference(observation, device, task, robot_type)
+
+    return observation
+
+
+def make_robot_action(action_tensor: PolicyAction, ds_features: dict[str, dict]) -> RobotAction:
+    """Converts a policy's output tensor into a dictionary of named actions.
+
+    This function translates the numerical output from a policy model into a
+    human-readable and robot-consumable format, where each dimension of the
+    action tensor is mapped to a named motor or actuator command.
+
+    Args:
+        action_tensor: A PyTorch tensor representing the policy's action,
+            typically with a batch dimension (e.g., shape [1, action_dim]).
+        ds_features: A configuration dictionary containing metadata, including
+            the names corresponding to each index of the action tensor.
+
+    Returns:
+        A dictionary mapping action names (e.g., "joint_1_motor") to their
+        corresponding floating-point values, ready to be sent to a robot
+        controller.
+    """
+    # TODO(Steven): Check if these steps are already in all postprocessor policies
+    action_tensor = action_tensor.squeeze(0)
+    action_tensor = action_tensor.to("cpu")
+
+    action_names = ds_features[ACTION]["names"]
+    act_processed_policy: RobotAction = {
+        f"{name}": float(action_tensor[i]) for i, name in enumerate(action_names)
+    }
+    return act_processed_policy
+
+
+def raise_feature_mismatch_error(
+    provided_features: set[str],
+    expected_features: set[str],
+) -> None:
+    """
+    Raises a standardized ValueError for feature mismatches between dataset/environment and policy config.
+    """
+    missing = expected_features - provided_features
+    extra = provided_features - expected_features
+    # TODO (jadechoghari): provide a dynamic rename map suggestion to the user.
+    raise ValueError(
+        f"Feature mismatch between dataset/environment and policy config.\n"
+        f"- Missing features: {sorted(missing) if missing else 'None'}\n"
+        f"- Extra features: {sorted(extra) if extra else 'None'}\n\n"
+        f"Please ensure your dataset and policy use consistent feature names.\n"
+        f"If your dataset uses different observation keys (e.g., cameras named differently), "
+        f"use the `--rename_map` argument, for example:\n"
+        f'  --rename_map=\'{{"observation.images.left": "observation.images.camera1", '
+        f'"observation.images.top": "observation.images.camera2"}}\''
+    )
+
+
+def validate_visual_features_consistency(
+    cfg: PreTrainedConfig,
+    features: dict[str, PolicyFeature],
+) -> None:
+    """
+    Validates visual feature consistency between a policy config and provided dataset/environment features.
+
+    Validation passes if EITHER:
+    - Policy's expected visuals are a subset of dataset (policy uses some cameras, dataset has more)
+    - Dataset's provided visuals are a subset of policy (policy declares extras for flexibility)
+
+    Args:
+        cfg (PreTrainedConfig): The model or policy configuration containing input_features and type.
+        features (Dict[str, PolicyFeature]): A mapping of feature names to PolicyFeature objects.
+    """
+    expected_visuals = {k for k, v in cfg.input_features.items() if v.type == FeatureType.VISUAL}
+    provided_visuals = {k for k, v in features.items() if v.type == FeatureType.VISUAL}
+
+    # Accept if either direction is a subset
+    policy_subset_of_dataset = expected_visuals.issubset(provided_visuals)
+    dataset_subset_of_policy = provided_visuals.issubset(expected_visuals)
+
+    if not (policy_subset_of_dataset or dataset_subset_of_policy):
+        raise_feature_mismatch_error(provided_visuals, expected_visuals)

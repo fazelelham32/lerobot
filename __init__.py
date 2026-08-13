@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,38 +12,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-LeRobot -- PyTorch library for real-world robotics.
+from lerobot.utils.action_interpolator import ActionInterpolator as ActionInterpolator
 
-Provides datasets, pretrained policies, and tools for training, evaluation,
-data collection, and robot control. Integrates with Hugging Face Hub for
-model and dataset sharing.
+from .act.configuration_act import ACTConfig as ACTConfig
+from .diffusion.configuration_diffusion import DiffusionConfig as DiffusionConfig
+from .eo1.configuration_eo1 import EO1Config as EO1Config
+from .evo1.configuration_evo1 import Evo1Config as Evo1Config
+from .factory import get_policy_class, make_policy, make_policy_config, make_pre_post_processors
+from .fastwam.configuration_fastwam import FastWAMConfig as FastWAMConfig
+from .gaussian_actor.configuration_gaussian_actor import GaussianActorConfig as GaussianActorConfig
+from .groot.configuration_groot import GrootConfig as GrootConfig
+from .lingbot_va.configuration_lingbot_va import LingBotVAConfig as LingBotVAConfig
+from .molmoact2.configuration_molmoact2 import MolmoAct2Config as MolmoAct2Config
+from .multi_task_dit.configuration_multi_task_dit import MultiTaskDiTConfig as MultiTaskDiTConfig
+from .pi0.configuration_pi0 import PI0Config as PI0Config
+from .pi0_fast.configuration_pi0_fast import PI0FastConfig as PI0FastConfig
+from .pi05.configuration_pi05 import PI05Config as PI05Config
+from .pretrained import PreTrainedPolicy as PreTrainedPolicy
+from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
+from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
+from .utils import make_robot_action, prepare_observation_for_inference
+from .vla_jepa.configuration_vla_jepa import VLAJEPAConfig as VLAJEPAConfig
+from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
+from .wall_x.configuration_wall_x import WallXConfig as WallXConfig
+from .xvla.configuration_xvla import XVLAConfig as XVLAConfig
 
-The base install is intentionally lightweight. Feature-specific dependencies
-are gated behind optional extras::
+# NOTE: Policy modeling classes (e.g., GaussianActorPolicy) are intentionally NOT re-exported here.
+# They have heavy optional dependencies and are loaded lazily via get_policy_class().
+# Import directly: ``from lerobot.policies.gaussian_actor.modeling_gaussian_actor import GaussianActorPolicy``
 
-    pip install 'lerobot[dataset]'       # dataset loading & creation
-    pip install 'lerobot[training]'      # training loop + wandb
-    pip install 'lerobot[hardware]'      # real robot control
-    pip install 'lerobot[core_scripts]'  # dataset + hardware + viz (record, replay, calibrate, etc.)
-    pip install 'lerobot[all]'           # everything
-"""
-
-from lerobot.__version__ import __version__
-
-# Maps optional extras to the CLI entry-points they unlock.
-available_extras: dict[str, list[str]] = {
-    "dataset": ["lerobot-dataset-viz", "lerobot-imgtransform-viz", "lerobot-edit-dataset"],
-    "training": ["lerobot-train"],
-    "hardware": [
-        "lerobot-calibrate",
-        "lerobot-find-port",
-        "lerobot-find-cameras",
-        "lerobot-find-joint-limits",
-        "lerobot-setup-motors",
-    ],
-    "core_scripts": ["lerobot-record", "lerobot-replay", "lerobot-teleoperate"],
-    "evaluation": ["lerobot-eval"],
-}
-
-__all__ = ["__version__", "available_extras"]
+__all__ = [
+    # Configuration classes
+    "ACTConfig",
+    "DiffusionConfig",
+    "EO1Config",
+    "FastWAMConfig",
+    "GaussianActorConfig",
+    "Evo1Config",
+    "GrootConfig",
+    "LingBotVAConfig",
+    "MolmoAct2Config",
+    "MultiTaskDiTConfig",
+    "PI0Config",
+    "PI0FastConfig",
+    "PI05Config",
+    "SmolVLAConfig",
+    "TDMPCConfig",
+    "VLAJEPAConfig",
+    "VQBeTConfig",
+    "WallXConfig",
+    "XVLAConfig",
+    # Base class
+    "PreTrainedPolicy",
+    # RTC utilities
+    "ActionInterpolator",
+    # Utility functions
+    "make_robot_action",
+    "prepare_observation_for_inference",
+    # Factory functions
+    "get_policy_class",
+    "make_policy",
+    "make_policy_config",
+    "make_pre_post_processors",
+]
