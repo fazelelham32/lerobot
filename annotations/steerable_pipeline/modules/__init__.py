@@ -13,3 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from .general_vqa import GeneralVqaModule
+from .interjections_and_speech import InterjectionsAndSpeechModule
+from .plan_subtasks_memory import PlanSubtasksMemoryModule
+
+__all__ = [
+    "GeneralVqaModule",
+    "InterjectionsAndSpeechModule",
+    "PlanSubtasksMemoryModule",
+]
